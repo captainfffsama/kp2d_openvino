@@ -22,7 +22,7 @@ void InitModel(const std::string& modelPath, InferenceEngine::InferRequest& infe
     inputName=network.getInputsInfo().begin()->first;
     
     inputInfo->setLayout(InferenceEngine::Layout::NHWC);
-    inputInfo->setPrecision(InferenceEngine::Precision::FP32);
+    inputInfo->setPrecision(InferenceEngine::Precision::U8);
 
     for( auto ele : network.getOutputsInfo()){
         outputNames.push_back(ele.first);
@@ -73,9 +73,14 @@ int main(int argc, char *argv[]) {
     std::string testImgPath="/home/chiebotgpuhq/pic_tmp/xianlan1.jpeg";
     std::string modelPath="/home/chiebotgpuhq/intel/openvino_2021.2.185/deployment_tools/kp2d.xml";
     cv::Mat testImg=cv::imread(testImgPath);
-    std::cout<<testImg.type()<<std::endl;
-    cv::normalize(testImg,testImg,1,0,cv::NORM_INF);
-    std::cout<<"final mat type:"<<testImg<<std::endl;
+    // if (!(0x0F & testImg.type()))
+    // {
+    //     testImg.convertTo(testImg, CV_32F);
+    // }
+    cv::Size testImgSize=testImg.size();
+    std::cout<<testImgSize<<std::endl;
+    // cv::normalize(testImg,testImg,1,0,cv::NORM_INF);
+    // std::cout<<"final mat type:"<<testImg<<std::endl;
 
     
     InferenceEngine::Blob::Ptr imgBlob=wrapMat2Blob(testImg);

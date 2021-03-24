@@ -7,34 +7,38 @@
 *****************************************************************************/
 
 #pragma once
+#include <opencv2/core/mat.hpp>
 #include <string>
 #include <opencv2/opencv.hpp>
+#include <tuple>
 #include "inference_engine.hpp"
 
-namespace openvino {
+namespace kp2d {
     using namespace InferenceEngine;
-    class VinoBase
+    using KPResult=std::tuple<cv::KeyPoint,cv::Mat,cv::KeyPoint,cv::Mat>;
+    class KP2D
     {
     private:
         Core ie;
         CNNNetwork network;
         ExecutableNetwork exeNetwork;
 
-    protected:
         InputsDataMap inputMap;
         OutputsDataMap outputMap;
         InferRequest inferRequest;
-    
+        int cellSize;
+
+        Blob::Ptr warpMat2Blob(const cv::Mat& mat);
+        void setInputInfo();
+        void setOutputInfo();
+
+        void preProcess(const cv::Mat& src,Blob::Ptr& srcBlob,cv::Size& newSize);
+
     public:
-        explicit VinoBase(const std::string& xmlPath);
-        virtual ~VinoBase();
+        explicit KP2D(const std::string& xmlPath,int downSample=8);
+        ~KP2D();
 
-
-        virtual void reshapeNet(int batchsize,int rows,int cols) final;
-        virtual void setInputInfo();
-        virtual void setOutputInfo();
-
-        virtual void infer(const cv::Mat src);
+        void infer(const cv::Mat& src,KPResult& kpresult);
 
     };
 }
