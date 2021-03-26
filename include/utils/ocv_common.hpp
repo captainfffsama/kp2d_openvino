@@ -53,13 +53,6 @@ void matU8ToBlob(const cv::Mat& orig_image, InferenceEngine::Blob::Ptr& blob, in
     }
 }
 
-/**
- * @brief Wraps data stored inside of a passed cv::Mat object by new Blob pointer.
- * @note: No memory allocation is happened. The blob just points to already existing
- *        cv::Mat data.
- * @param mat - given cv::Mat object with an image data.
- * @return resulting Blob pointer.
- */
 static UNUSED InferenceEngine::Blob::Ptr wrapMat2Blob(const cv::Mat &mat,bool norm=1) {
     size_t channels = mat.channels();
     size_t height = mat.size().height;
