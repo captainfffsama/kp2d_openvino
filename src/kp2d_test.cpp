@@ -9,7 +9,11 @@
 #include "kp2d.hpp"
 #include "opencv2/opencv.hpp"
 #include <algorithm>
+#include <ctime>
 #include <opencv2/core/types.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <vector>
 
 struct Compare{
@@ -19,39 +23,47 @@ struct Compare{
 };
 
 
+
 int main(int argc, char *argv[])
 {
     
-    std::string testImgPath="/home/chiebotgpuhq/pic_tmp/xianlan1.jpeg";
+    std::string testImgPath="/home/chiebotgpuhq/MyCode/dataset/panbie_withxml/0001_1.jpg";
+    std::string testImg2Path="/home/chiebotgpuhq/MyCode/dataset/panbie_withxml/0001_2.jpg";
     std::string modelPath="/home/chiebotgpuhq/intel/openvino_2021.2.185/deployment_tools/kp2d_v10.xml";
     cv::Mat src=cv::imread(testImgPath);
+    cv::Mat src2=cv::imread(testImg2Path);
+    std::cout<<src.size<<std::endl;
 
-    std::cout<<src.total()<<std::endl;
 
-    kp2d::KP2D model(modelPath);
-    kp2d::KPResult kpresult;
-    bool success=model.Infer(src, kpresult);
-    std::cout<<"success flag:"<<success<<std::endl;
+    std::clock_t s,e;
+    s=clock();
+    kp2d::KP2D model(modelPath,3000);
+    e=clock();
+    std::cout<<"init "<<(double)(e-s)/CLOCKS_PER_SEC<<std::endl;
+    std::vector<cv::KeyPoint> kps1,kps2;
+    cv::Mat descs1,descs2;
+    std::vector<float> scores1,scores2;
+    bool success=model.Infer(src, kps1,descs1,scores1);
+    bool success1=model.Infer(src2, kps2,descs2,scores2);
 
-    // std::vector<int> a {5,1,4,2,5,3,6,10};
-    // std::vector<int> b;
-    // std::make_heap(b.begin(),b.end());
-    // for (auto c:a){
-    //     b.push_back(c);
-    //     std::push_heap(b.begin(),b.end(),Compare());
-    // }
-    // 
-    // for (auto c:b){
-    //     std::cout<<c<<" ";
-    // }
-    // std::cout<<std::endl;
-    // for (int i=0;i<6;++i)
-    // {
-    //     std::pop_heap(b.begin(),b.end(),Compare());
-    //     std::cout<<b.back()<<std::endl;
-    //     b.pop_back();
-    // }
+    cv::Ptr<cv::BFMatcher> matcher=cv::BFMatcher::create(cv::NORM_L2,true);
 
+    std::vector<cv::DMatch> matche_kp;
+    matcher->match(descs2,descs1,matche_kp);
     
+    std::cout<<"heihbei"<<std::endl;
+    std::vector<cv::DMatch> goodMatches;
+    std::cout<<matche_kp.size()<<std::endl;
+    for(uint i=0;i<matche_kp.size();++i)
+    {
+        goodMatches.push_back(matche_kp[i]);
+    }
+    
+    cv::Mat dstImage;
+    cv::drawMatches(src2,kps2,src,kps1,goodMatches,dstImage);
+
+    cv::imshow("test",dstImage);
+    cv::waitKey();
+
     return 0;
 }

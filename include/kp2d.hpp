@@ -17,7 +17,6 @@
 
 namespace kp2d {
     using namespace InferenceEngine;
-    using KPResult=std::tuple<cv::KeyPoint,cv::Mat,std::vector<float> >;
     using ScoreInfo=std::tuple<int,int,float>;
     class KP2D
     {
@@ -30,14 +29,17 @@ namespace kp2d {
         OutputsDataMap outputMap;
         InferRequest inferRequest;
 
-        int cellSize;
+        int cellSize; // 每个cell的尺寸,数值是2的下采样数次方
         cv::Size* inputImgSize;
-        int topK;
-        float threshold;
-        int scoreDim;
-        int featDim;
-        int coordDim;
+        int topK; //  选分数最大的前多少个点
+        float threshold; // 选分数时候的阈值
+        int scoreDim; // 分数张量的轴数
+        int featDim;  // 描述子张量的轴数
+        int coordDim; // 偏移张量的轴数
         int batchSize;
+        float cellStep;  // (cellSize-1)/2
+        float crossRatio;
+        int featCellSize;
 
         Blob::Ptr Mat2Blob(const cv::Mat& mat);
         bool Blob2Mat(const Blob::Ptr& blob,cv::Mat& blobMat);
@@ -45,7 +47,9 @@ namespace kp2d {
         void SetOutputInfo();
 
         Blob::Ptr PreProcess(const cv::Mat& src);
-        bool PostProcess(const Blob::Ptr& coordBlob,const Blob::Ptr& scoreBlob,const Blob::Ptr& featBlob,KPResult& result);
+        bool PostProcess(const Blob::Ptr& coordsBlob,const Blob::Ptr& scoreBlob,const Blob::Ptr& featBlob,std::vector<cv::KeyPoint>& kps,cv::Mat& descs,std::vector<float>& scores);
+
+        inline float BilinearInter(float x,float y,float x1,float y1,float x2,float y2,float f11,float f21,float f12,float f22);
 
         template<typename T>
         const T* GetBlobReaderPtr(const Blob::Ptr& blob);
@@ -53,10 +57,10 @@ namespace kp2d {
         T* GetBlobWritePtr(Blob::Ptr& blob);
 
     public:
-        explicit KP2D(const std::string& xmlPath,int top_k=20000,float scoreThr=0.6,int downSample=8,int featLength=256,int batch =1);
+        explicit KP2D(const std::string& xmlPath,int top_k=20000,float scoreThr=0.6,int downSample=8,int featLength=256,int batch =1,float crossRate=2);
         ~KP2D();
 
-        bool Infer(const cv::Mat& src,KPResult& kpresult);
+        bool Infer(const cv::Mat& src,std::vector<cv::KeyPoint>& kps,cv::Mat& descs,std::vector<float>& scores);
 
     };
 

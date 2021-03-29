@@ -1,16 +1,18 @@
 #include "kp2d.hpp"
 #include "opencv2/opencv.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <opencv2/core/hal/interface.h>
 #include <opencv2/core/matx.hpp>
+#include <opencv2/core/types.hpp>
 #include <tuple>
 
 using namespace kp2d;
 using namespace InferenceEngine;
 
-KP2D::KP2D(const std::string& xmlPath,int top_k,float scoreThr,int downSample,int featLength,int batch)
-    :cellSize(downSample),topK(top_k),threshold(scoreThr),scoreDim(1),featDim(featLength),coordDim(2),batchSize(batch)
+KP2D::KP2D(const std::string& xmlPath,int top_k,float scoreThr,int downSample,int featLength,int batch,float crossRate)
+    :cellSize(downSample),topK(top_k),threshold(scoreThr),scoreDim(1),featDim(featLength),coordDim(2),batchSize(batch),cellStep((downSample-1)/2.),crossRatio(crossRate),featCellSize(4)
 {
     network=ie.ReadNetwork(xmlPath);
     std::string inputName;
@@ -34,7 +36,6 @@ void KP2D::SetInputInfo(){
         inputData->setPrecision(Precision::FP32);
         inputData->setLayout(Layout::NCHW);
         inputData->getPreProcess().setColorFormat(ColorFormat::BGR);
-        std::cout<<inputData->getLayout()<<std::endl;
     }
 }
 
@@ -46,32 +47,49 @@ void KP2D::SetOutputInfo(){
     }
 }
 
-bool KP2D::Infer(const cv::Mat &src, KPResult &kpresult){
-    auto originSize=src.size();
-    Blob::Ptr srcBlob=PreProcess(src);
-
-    
-    if (!srcBlob)
-    {
-        return false;
-    }
-
+bool KP2D::Infer(const cv::Mat& src,std::vector<cv::KeyPoint>& kps,cv::Mat& descs,std::vector<float>& scores)
+{
+    cv::Mat dst;
+    src.convertTo(dst, CV_32FC3,1.0/255.);
     //  根据图片尺寸调整网络
     //  TODO: 后续可以考虑加个dynamic参数,对于固定的图片就固定住网络
 
+    Blob::Ptr inputBlob=inferRequest.GetBlob("x");
+    auto buffer=inputBlob->buffer().as<PrecisionTrait<Precision::FP32>::value_type *>();
+    
+    cv::Size inputSize(1920,1080);
+    for (int h=0;h<src.rows;++h)
+    {
+        auto hdataPtr=src.ptr<uchar>(h);
+        for(int w=0;w<src.cols;++w)
+        {
+            for(int c=0;c<src.channels();++c)
+            {
+                buffer[c*src.rows*src.cols+h*src.cols+w]=static_cast<float>(hdataPtr[w*src.channels()+c]/255.);
+            }
+        }
+    }
 
-    inferRequest.SetBlob("x",srcBlob);
+
+    std::clock_t s,e;
+    s=clock();
+    inferRequest.Infer();
+    e=clock();
+    std::cout<<"infer:"<<(double)(e-s)/CLOCKS_PER_SEC<<std::endl;
     Blob::Ptr coordBlob=inferRequest.GetBlob("coord");
     Blob::Ptr scoreBlob=inferRequest.GetBlob("score");
     Blob::Ptr featBlob=inferRequest.GetBlob("feat");
 
     std::cout<<"score blob precision:"<<scoreBlob->getTensorDesc().getPrecision()<<std::endl;
 
-    if(!PostProcess(coordBlob,scoreBlob,featBlob,kpresult))
+    s=clock();
+    if(!PostProcess(coordBlob,scoreBlob,featBlob,kps,descs,scores))
     {
         std::cout<<"ERROR!! post process fail!!"<<std::endl;
         return false;
     }
+    e=clock();
+    std::cout<<"postProcess:"<<(double)(e-s)/CLOCKS_PER_SEC<<std::endl;
     return true;
 
 }
@@ -134,7 +152,8 @@ Blob::Ptr KP2D::Mat2Blob(const cv::Mat& mat){
     return make_shared_blob<float>(tDesc,(float*)mat.data);
 }
 
-bool KP2D::PostProcess(const Blob::Ptr& coordsBlob, const Blob::Ptr& scoreBlob,const Blob::Ptr& featBlob, KPResult& result){
+bool KP2D::PostProcess(const Blob::Ptr& coordsBlob,const Blob::Ptr& scoreBlob,const Blob::Ptr& featBlob,std::vector<cv::KeyPoint>& kps,cv::Mat& descs,std::vector<float>& scores)
+{
     const float* scorePtr=GetBlobReaderPtr<float>(scoreBlob);
     const float* featPtr=GetBlobReaderPtr<float>(featBlob);
     const float* coordsPtr=GetBlobReaderPtr<float>(coordsBlob);
@@ -144,63 +163,84 @@ bool KP2D::PostProcess(const Blob::Ptr& coordsBlob, const Blob::Ptr& scoreBlob,c
         std::cout<<"ERROR!!! get data failed"<<std::endl;
         return false;
     }
-    int kpNumberCount=topK;
 
     auto scoreSize=scoreBlob->getTensorDesc().getDims();
-    int sw=scoreSize[3];
-    int sh=scoreSize[2];
-    std::cout<<sw<<std::endl;
-    std::cout<<sh<<std::endl;
 
-    int imgW=sw*cellSize;
-    int imgH=sh*cellSize;
+    const int sw=scoreSize[3];
+    const int sh=scoreSize[2];
+
+
+    const int imgW=sw*cellSize;
+    const int imgH=sh*cellSize;
 
     std::vector<ScoreInfo> scoreIdxTemp_v;
     std::make_heap(scoreIdxTemp_v.begin(),scoreIdxTemp_v.end());
 
-    int beyondS=0;
-    int belowS=0;
-    int zeroNum=0;
-
-    for (int h=1;h<(sh-1);h++){
-        for (int w=1;w<(sw-1);w++){
-            if(scorePtr[h*sw+w]>1)
-            {
-                ++beyondS;
-            }
-            else if(scorePtr[h*sw+w] < 0)
-            {
-                ++belowS;
-            }
-            else if(scorePtr[h*sw+w] ==0)
-            {++zeroNum;}
-            else
-            {
+    int kpNumberCount=topK;
+    int borderDrop=std::ceil(crossRatio-1); // 简单处理,直接把可能回归超出图像的点去掉
+    for (int h=borderDrop;h<(sh-borderDrop);h++){
+        for (int w=borderDrop;w<(sw-borderDrop);w++){
+            if(scorePtr[h*sw+w]>threshold){
                 scoreIdxTemp_v.push_back(std::make_tuple(w,h,scorePtr[h*sw+w]));
-                std::push_heap(scoreIdxTemp_v.begin(),scoreIdxTemp_v.end(),[](const ScoreInfo& A,const ScoreInfo& B) {return std::get<2>(A) < std::get<2>(B); });
-
+                std::push_heap(scoreIdxTemp_v.begin(),scoreIdxTemp_v.end(),[](const ScoreInfo& A,const ScoreInfo& B) {return std::get<2>(A) > std::get<2>(B); });
+                kpNumberCount--;
             }
         }
     }
 
-    std::cout<<" 超过1的分数有:"<<beyondS<<std::endl;
-    std::cout<<" 低于0的分数有:"<<belowS<<std::endl;
-    std::cout<<" 等于0的分数有:"<<zeroNum<<std::endl;
-    std::cout<<" 正常范围分数有:"<<scoreIdxTemp_v.size()<<std::endl;
-
-    for (int i=0;i<scoreIdxTemp_v.size();++i)
+    //  若过阈值的数少于topK  需要选出最大的k个
+    while(kpNumberCount<0)
     {
         std::pop_heap(scoreIdxTemp_v.begin(),scoreIdxTemp_v.end(),
-                [](const ScoreInfo& A,const ScoreInfo& B) {return std::get<2>(A) < std::get<2>(B); });
-        int idxx=0,idxy=0;
-        float score=0;
-        std::tie(idxx,idxy,score)=scoreIdxTemp_v.back();
-        if(!i)
-        {
-            std::cout<<" "<<idxx<<" "<<idxy<<" "<<score<<std::endl;
-        }
+                [](const ScoreInfo& A,const ScoreInfo& B) {return std::get<2>(A) > std::get<2>(B); });
+        scoreIdxTemp_v.pop_back();
+        kpNumberCount++;
     }
 
+    int idxx=0,idxy=0,score=0;
+    auto coordSize=coordsBlob->getTensorDesc().getDims();
+    const int &cw=coordSize[3], & ch=coordSize[2];
+    auto featSize=featBlob->getTensorDesc().getDims();
+    const int &fw=featSize[3], & fh=featSize[2],& fc=featSize[1];
+    cv::Mat descriptors(scoreIdxTemp_v.size(),fc,CV_32FC1);
+
+    int currentKpIdx=0;
+    for(auto scoreInfo:scoreIdxTemp_v)
+    {
+        std::tie(idxx,idxy,score)=scoreInfo;
+        scores.push_back(score);
+        float xBias=coordsPtr[idxy*cw+idxx];
+        float yBias=coordsPtr[cw*ch+idxy*cw+idxx];
+
+        float xCoord=idxx*cellSize+cellStep+xBias*(crossRatio*cellStep);
+        float yCoord=idxy*cellSize+cellStep+yBias*(crossRatio*cellStep);
+
+
+        cv::KeyPoint kp(xCoord,yCoord,1.0);
+        kps.push_back(kp);
+        int featIdxxl=std::floor(xCoord/featCellSize);
+        int featIdxxr=std::floor(xCoord/featCellSize)+1;
+
+        int featIdxyl=std::floor(yCoord/featCellSize)*featCellSize;
+        int featIdxyr=std::floor(yCoord/featCellSize)+1;
+
+        float* descPtr= descriptors.ptr<float>(currentKpIdx);
+        for (int i=0;i<fc;++i)
+        {
+            float x1=featIdxxl*featCellSize;
+            float x2=featIdxxr*featCellSize;
+            float y1=featIdxyl*featCellSize;
+            float y2=featIdxyr*featCellSize;
+
+            float f11=featPtr[i*fw*fh+featIdxyl*fw+featIdxxl];
+            float f21=featPtr[i*fw*fh+featIdxyr*fw+featIdxxl];
+            float f12=featPtr[i*fw*fh+featIdxyl*fw+featIdxxr];
+            float f22=featPtr[i*fw*fh+featIdxyr*fw+featIdxxr];
+            descPtr[i]=BilinearInter(xCoord, yCoord, featIdxxl, featIdxyl, featIdxxr, featIdxyr,  f11, f21, f12, f22);
+        }
+        ++currentKpIdx;
+    }
+    descs=descriptors;
     return true;
 
 }
@@ -248,4 +288,9 @@ T* KP2D::GetBlobWritePtr(Blob::Ptr& blob)
     auto mblobHolder=mblob->wmap();
     T* blob_data=mblobHolder.as<T *>();
     return blob_data;
+}
+
+inline float KP2D::BilinearInter(float x,float y,float x1,float y1,float x2,float y2,float f11,float f21,float f12,float f22)
+{
+    return (f11*(x2-x)*(y2-y))/((x2-x1)*(y2-y1))+(f21*(x-x1)*(y2-y))/((x2-x1)*(y2-y1))+(f12*(x2-x)*(y-y1))/((x2-x1)*(y2-y1))+(f22*(x-x1)*(y-y1))/((x2-x1)*(y2-y1));
 }
