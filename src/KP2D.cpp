@@ -1,11 +1,8 @@
-#include "kp2d.hpp"
+#include "KP2D.hpp"
 #include "opencv2/opencv.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <opencv2/core/hal/interface.h>
-#include <opencv2/core/matx.hpp>
-#include <opencv2/core/types.hpp>
 #include <tuple>
 
 using namespace kp2d;
@@ -71,25 +68,16 @@ bool KP2D::Infer(const cv::Mat& src,std::vector<cv::KeyPoint>& kps,cv::Mat& desc
     }
 
 
-    std::clock_t s,e;
-    s=clock();
     inferRequest.Infer();
-    e=clock();
-    std::cout<<"infer:"<<(double)(e-s)/CLOCKS_PER_SEC<<std::endl;
     Blob::Ptr coordBlob=inferRequest.GetBlob("coord");
     Blob::Ptr scoreBlob=inferRequest.GetBlob("score");
     Blob::Ptr featBlob=inferRequest.GetBlob("feat");
 
-    std::cout<<"score blob precision:"<<scoreBlob->getTensorDesc().getPrecision()<<std::endl;
-
-    s=clock();
     if(!PostProcess(coordBlob,scoreBlob,featBlob,kps,descs,scores))
     {
         std::cout<<"ERROR!! post process fail!!"<<std::endl;
         return false;
     }
-    e=clock();
-    std::cout<<"postProcess:"<<(double)(e-s)/CLOCKS_PER_SEC<<std::endl;
     return true;
 
 }
@@ -205,7 +193,7 @@ bool KP2D::PostProcess(const Blob::Ptr& coordsBlob,const Blob::Ptr& scoreBlob,co
     cv::Mat descriptors(scoreIdxTemp_v.size(),fc,CV_32FC1);
 
     int currentKpIdx=0;
-    for(auto scoreInfo:scoreIdxTemp_v)
+    for(const auto& scoreInfo:scoreIdxTemp_v)
     {
         std::tie(idxx,idxy,score)=scoreInfo;
         scores.push_back(score);
